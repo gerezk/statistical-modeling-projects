@@ -1,0 +1,208 @@
+---
+title: "Exercise 4"
+author: "Kyzer Gerez"
+date: "05.11.2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+(1) We have realized that the data set is in fact a multivariate time series data set.
+Argue why the training/test split we have used so far is not very appropriate for
+such data, and use a more appropriate split for the following tasks.
+
+    With random sampling, the model could be trained on future observations that are
+then used to predict past observations. This is not appropriate since the model
+will rely on data that is not yet available to make predictions. The proper
+approach would be to split the data chronologically into train/test sets based
+on the variables \texttt{COMPLETION.YEAR} and \texttt{COMPLETION.QUARTER}.
+
+```{r, echo=TRUE}
+load("building.RData")
+
+# sort by COMPLETION YEAR and QUARTER
+df <- sort_by(df, list(df$COMPLETION.YEAR, df$COMPLETION.QUARTER))
+
+# split chronologically into 2/3 train 1/3 test
+train_size <- floor(2/3 * nrow(df))
+
+train <- df[1:train_size, ]
+test <- df[(train_size+1):nrow(df), ]
+```
+
+(2) \textit{Partial Least Squares regression (PLS)}:
+    
+    (a) Use the training data to fit a PLS model. PLS is implemented in the \texttt{library(pls)} as the function \texttt{plsr()}, see help. Perform (useful?) cross-validation using 10 segments (see help of \texttt{plsr()}) and scale the data (\texttt{scale=TRUE}).
+  
+    ```{r, echo=TRUE, message=FALSE}
+    library(pls)
+    
+    model.pls <- plsr(y ~ .,
+               data=train,
+               validation="CV",
+               segments=10,
+            #   segment.type="consecutive",
+               scale=TRUE)
+    
+    summary(model.pls)
+    ```
+    
+    Cross-validation is probably not appropriate since most of the splits
+    will have test data that is dated prior to at least some training data.
+    
+    (b) Plot the obtained prediction errors from cross-validation, see lecture notes.
+How many components seem to be optimal? What is the resulting RMSE?
+
+    ```{r, echo=TRUE, warning=FALSE}
+    # find optimal number of components based on one sigma
+    cv_results <- RMSEP(model.pls, estimate = "CV")
+    comp_opt <- selectNcomp(model.pls, method = "onesigma", plot = TRUE)
+    paste("The optimal number of components is",
+          comp_opt,
+          "with an RMSE of",
+          round(cv_results$val[1,,comp_opt], 3))
+    
+    # zoomed in plot
+    validationplot(model.pls, val.type = "RMSEP", ncomp = 1:55, 
+                   main = "Zoomed in Validation Plot")
+    abline(v = comp_opt)
+    ```
+
+    Based on lecture discussions, the optimal number of components can be found
+    by determining the minimum RMSE, then selecting the number of components below
+    that which achieved the minimum RMSE while being within one standard error
+    of this value.
+
+    (c) Use the function \texttt{predplot()} to plot the measured \textit{y} values against the cross-validated \textit{y} values considering the optimal model.
+
+    ```{r, echo=TRUE}
+    predplot(model.pls, comp_opt, line=TRUE)
+    ```
+
+    (d) Plot the predicted versus observed values for the test data, and compute the
+RMSE. Compare with the values from last exercise.
+
+    ```{r, echo=TRUE}
+    library(Metrics)
+    
+    test_pls_pred <- predict(model.pls, test, comp_opt)
+    test_pls_rmse <- round(rmse(test$y, test_pls_pred), 3)
+    paste("Test RMSE for",
+          comp_opt,
+          "Comps:", 
+          test_pls_rmse)
+    
+    plot(test$y, test_pls_pred,
+         main="Predicted vs Observed for Test Set",
+         xlab="Observed",
+         ylab="Predicted")
+    abline(a=0, b=1)
+    ```
+    
+    From the last exercise, the optimal PCR model based on the one standard 
+    error rule achieved a test RMSE of 0.357. This is better than the optimal PLS
+    model, which resulted in a test RMSE of 0.479. The difference in performance
+    could be due to the train/test split. The PCR model was created based on a
+    random split. It could be that there is some temporal trend that the PCR model
+    took advantage of, which then led to a model that performs better than it should.
+
+(3) \textit{Ridge Regression}:
+
+    (a) Use the function \texttt{glmnet()} from the \texttt{library(glmnet)}
+    with the parameter \texttt{alpha=0} and apply it to the training data – 
+    see also course notes. Plot the result object. How can you interpret the plot? Which
+    default parameters are used for \texttt{lambda}? What is the meaning of the parameter
+    \texttt{alpha}?
+
+    ```{r, echo=TRUE}
+    library(glmnet)
+    
+    model.ridge <- glmnet(as.matrix(train[-c(1)]), train$y,
+                          alpha=0)
+    
+    plot(model.ridge, sign.lambda = 1)
+    
+    print(model.ridge)
+    ```
+
+    Each curve in the plot represents the estimated coefficient for a variable
+    at various values of \texttt{lambda}. As the penalty term increases, coefficients
+    are drived down to zero. Printing the fitted model will show
+    the number of non-zero coefficients at every \texttt{lambda} values. In this
+    case, all variables have non-zero coefficients across all \texttt{lambda} 
+    values.
+    
+    The parameter \texttt{lambda} is set to \texttt{NULL} by default. This means
+    that the machine then computes its own sequence of \texttt{lambda} values
+    based on the parameters \texttt{nlambda} and \texttt{lambda.min.ratio}.
+    By default \texttt{nlambda=100}, so 100 values are generated. Since there
+    are more observations than variables, \texttt{lambda.min.ratio} defaults to
+    \texttt{1e-04}. This value is multiplied with \texttt{lambda.max} to get the
+    smallest value for \texttt{lambda} in the sequence. \texttt{lambda.max}
+    represents the smallest value for which all coefficients are zero.
+
+    The parameter \texttt{alpha} is the elasticnet mixing parameter, which is 
+    used to set the penalty. \texttt{alpha=0} is the ridge penalty, and 
+    \texttt{alpha=1} is the lasso penalty.
+
+    (b) Use the function \texttt{cv.glmnet()} and apply it to the training data. 
+    Visualize and interpret the results. How do you obtain the optimal tuning 
+    parameter and the regression coefficients?
+
+    ```{r, echo=TRUE}
+    cv.ridge <- cv.glmnet(as.matrix(train[-c(1)]), train$y,
+                          alpha=0)
+    
+    plot(cv.ridge, sign.lambda=1)
+    
+    lambda_opt <- tail(cv.ridge$lambda, n=1)
+    paste("The optimal tuning parameter is", lambda_opt)
+    
+    print("The regression coefficients for the optimal tuning parameter are:")
+    coef(cv.ridge, s="lambda.min")
+    ```
+
+    For this case, the smallest \texttt{lambda} value is the optimal tuning parameter since
+    it has the smallest MSE. More generally, the one standard error rule could
+    be applied to find the optimal \texttt{lambda}. The regression coefficients
+    can be found by using \texttt{coef} with \texttt{p} set to the optimal
+    \texttt{lambda}.
+
+    (c) Use the optimal model to predict the response for the test data. Compare 
+    the predictions with the reported values graphically. Compare the RMSE results
+    with those from the previous exercises.
+
+    ```{r, echo=TRUE}
+    test_ridge_pred <- predict(cv.ridge, as.matrix(test[-c(1)]), lambda_opt)
+    test_ridge_rmse <- round(rmse(test$y, test_ridge_pred), 3)
+    paste("Test RMSE for ridge regression model with lambda =",
+          round(lambda_opt, 3),
+          "is", 
+          test_ridge_rmse)
+    
+    plot(test$y, test_ridge_pred,
+         main="Actual vs Fitted for Test Using Ridge",
+         xlab="Actual",
+         ylab="Fitted")
+    abline(0, 1)
+    ```
+
+    The plot is similar to the one for pls where there is some curvature 
+    for the larger \texttt{y} values. The RMSE for the ridge model is fairly
+    close to that for the PLS model but slightly worse. This then also means that
+    the ridge model performed worse than the models from previous exercises
+    that used random train and test splits.
+
+    (d) Going back to 3.(a): At least my plot shows that the curves are not strictly
+    increasing, but some decrease again after an increase. This seems counter-
+    intuitive. What could be the explanation?
+
+    It could be the case that some variables get driven down to zero, which
+    leads to another variable suddenly becoming more important and estimated 
+    a larger coefficient. The estimated coefficient then gets driven down again with
+    larger \texttt{lambda}. This can happen when multicollinearity is present
+    among the predictors, such as the lagged predictors in this dataset.
+
+</div></pre>

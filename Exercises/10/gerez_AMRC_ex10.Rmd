@@ -1,0 +1,183 @@
+---
+title: "Exercise 10"
+author: "Kyzer Gerez"
+date: "07.01.2026"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+Load the data \texttt{Diabetes} from the package \texttt{ROCit}. Our goal is to 
+find a classification model for \texttt{diabetes}, based on the variable 
+\texttt{dtest} – see help file. Convert this information to a binary variable. 
+To simplify the task, use as predictor variables: 
+\texttt{chol, stab.glu, hdl, bmi, age,} and \texttt{gender}. Afterwards, delete 
+observations with missings, using \texttt{na.omit()}.
+
+```{r echo=TRUE, message=FALSE}
+library(ROCit); data(Diabetes)
+library(mgcv)
+library(caret)
+
+# convert dtest to binary variable
+Diabetes$dtest <- ifelse(Diabetes$dtest == "+", TRUE, FALSE)
+
+# select only required predictors
+vars <- c("chol", "stab.glu", "hdl", "bmi", "age", "gender", "dtest")
+Diabetes <- Diabetes[vars]
+
+# delete obs with NAs
+Diabetes <- na.omit(Diabetes)
+```
+
+Select randomly a training set of about 3/4 of the observations from each class, 
+build the classification model, predict the group membership for the (remaining) 
+test data and, as the final result, show the resulting confusion table and 
+compute the misclassification rate.
+
+```{r, echo=TRUE}
+set.seed(12427543)
+
+# create 3/4 train and test sets
+samp_size <- floor(3/4*nrow(Diabetes))
+train_indx <- sample(1:nrow(Diabetes), samp_size)
+train <- Diabetes[train_indx,]
+test <- Diabetes[-train_indx,]
+```
+
+(1) Fit a logistic regression model, see Exercise 7, and report the results.
+    
+    ```{r, echo=TRUE}
+    # train logistic regression model
+    mod.log.reg <- glm(dtest ~., train, family="binomial")
+    
+    # predict on test
+    log.reg.pred <- predict(mod.log.reg, test)
+    
+    # convert from linear to binary scale
+    log.reg.pred <- ifelse(log.reg.pred<=0, FALSE, TRUE)
+    
+    # build confusion matrix
+    log.reg.confusion <- confusionMatrix(data=as.factor(log.reg.pred), 
+                                         reference=as.factor(test$dtest))
+    log.reg.confusion$table
+    
+    # compute misclassification rate
+    log.reg.misclass <- (log.reg.confusion$table[2,1] + # FP
+      log.reg.confusion$table[1,2]) / # FN
+      (nrow(test))
+    print(paste("The misclassification rate for logistic regression is", 
+                round(log.reg.misclass, 3)))
+    ```
+
+(2) Use GAMs, implemented in the function \texttt{gam()} of the package 
+\texttt{library(mgcv)}, with the argument \texttt{family="binomial"}.
+
+    (a) The smooth functions in GAMs can be defined for every variable by 
+    \texttt{s(variable)}, see also course notes. It might not make sense to use 
+    smooth functions for all variables, for sure not for factor variables. Now 
+    compute the GAM based on your chosen “formula”.
+    
+    ```{r, echo=TRUE}
+    # train GAM
+    gam.object <- gam(dtest~s(chol)+s(stab.glu)+s(hdl)+s(bmi)+s(age)+gender,
+                      data=train,
+                      family="binomial")
+    ```
+    
+    (b) Which variables are significant in the model? How complex are the smooth 
+    functions (in terms of the effective degrees of freedom)?
+    
+    ```{r, echo=TRUE}
+    summary(gam.object)
+    ```
+    
+    The variables \texttt{chol} and \texttt{stab.glu} are significant. The 
+    smooth functions for the variables \texttt{stab.glu}, \texttt{bmi}, and 
+    \texttt{age} are rather complex, having about 7-8 effective degrees of 
+    freedom. In contrast, \texttt{hdl} only has 1 effective degree of freedom,
+    so linear.
+    
+    (c) Plot the explanatory variables against their smoothed values as they are 
+    used in the model. You can simply use:
+    \texttt{plot(gam.object,page=1,shade=TRUE,shade.col="yellow")} How can you 
+    interpret these plots?
+    
+    ```{r, echo=TRUE}
+    plot(gam.object,page=1,shade=TRUE,shade.col="yellow")
+    ```
+    
+    The plots show the estimates for each smooth term. The yellow band indicates
+    the 95% confidence interval for the smooth estimate. The ticks on the x-axis
+    represent each datapoint for that predictor. Sparse regions generally show
+    larger CIs since the extrapolation risk is greater. The y-axis shows the 
+    effect of the predictor on the response.
+    
+    (d) Report the confusion table and the misclassification error for the test 
+    set. How does this compare to (1)?
+    
+    ```{r, echo=TRUE}
+    # predict on test
+    gam.pred <- predict(gam.object, test)
+    
+    # convert from linear to binary scale
+    gam.pred <- ifelse(gam.pred<=0, FALSE, TRUE)
+    
+    # build confusion matrix
+    gam.confusion <- confusionMatrix(data=as.factor(gam.pred), 
+                                         reference=as.factor(test$dtest))
+    gam.confusion$table
+    
+    # compute misclassification rate
+    gam.misclass <- (gam.confusion$table[2,1] + # FP
+      gam.confusion$table[1,2]) / # FN
+      (nrow(test))
+    print(paste("The misclassification rate for GAM is", 
+                round(gam.misclass, 3)))
+    ```
+    GAM performed significantly worse than logistic regression due to having a 
+    higher false positive rate.
+    
+    (e) The complexity of the smooth functions could be controlled by the 
+    parameter \texttt{k} within \texttt{s()}, which allows to set an upper bound 
+    for the effective degrees of freedom. If this makes sense, try it out and 
+    check if the results in (2)(b) and (d) change.
+    
+    ```{r, echo=TRUE}
+    # train GAM
+    gam.object.mod <- gam(dtest~s(chol)+s(stab.glu,k=3)+s(hdl)+s(bmi)+s(age)+gender,
+                      data=train,
+                      family="binomial")
+    
+    # show model
+    summary(gam.object.mod)
+    
+    # predict on test
+    gam.mod.pred <- predict(gam.object.mod, test)
+    
+    # convert from linear to binary scale
+    gam.mod.pred <- ifelse(gam.mod.pred<=0, FALSE, TRUE)
+    
+    # build confusion matrix
+    gam.mod.confusion <- confusionMatrix(data=as.factor(gam.mod.pred), 
+                                         reference=as.factor(test$dtest))
+    gam.mod.confusion$table
+    
+    # compute misclassification rate
+    gam.mod.misclass <- (gam.mod.confusion$table[2,1] + # FP
+      gam.mod.confusion$table[1,2]) / # FN
+      (nrow(test))
+    print(paste("The misclassification rate for GAM with set EDoF is", 
+                round(gam.mod.misclass, 3)))
+    ```
+
+    I tested different values of \texttt{k} for the variables \texttt{chol} and
+    \texttt{stab.glu} since they were signifcant in the original GAM. I found
+    that setting \texttt{s(stab.glu,k=3)} yielded a much better model with a
+    misclassification rate of 9.4%, though this is still higher than the logistic
+    regression model. Worth noting is that the modified model now lists 
+    \texttt{stab.glu} as very significant.
+
+</div></pre>

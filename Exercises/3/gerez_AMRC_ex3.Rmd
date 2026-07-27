@@ -1,0 +1,312 @@
+---
+title: "Exercise 3"
+author: "Kyzer Gerez"
+date: "29.10.2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+```{r, echo=TRUE}
+load("building.RData")
+
+# split into 2/3 train 1/3 test
+smp_size <- floor(2/3 * nrow(df))
+
+# set the seed to make partition reproducible
+set.seed(1)
+train_ind <- sample(seq_len(nrow(df)), size = smp_size)
+
+train <- df[train_ind, ]
+test <- df[-train_ind, ]
+```
+
+(1) \textit{Principal component regression (PCR)}:
+    
+    (a) Use the training data to fit a PCR model. PCR is implemented in the \texttt{library(pls)}
+as the function \texttt{pcr()}, see help. Perform cross-validation using 10 segments
+(see help of \texttt{pcr()}) and scale the data (\texttt{scale=TRUE}).
+  
+    ```{r, echo=TRUE, message=FALSE}
+    library(pls)
+    
+    model.pcr <- pcr(y ~ .,
+               data=train,
+               validation="CV",
+               segments=10,
+               segment.type="random",
+               scale=TRUE)
+    
+    summary(model.pcr)
+    ```
+    
+    (b) Plot the obtained prediction errors from cross-validation, see lecture notes.
+How many components seem to be optimal? What is the resulting RMSE?
+
+    ```{r, echo=TRUE, warning=FALSE}
+    # find optimal number of components based on one sigma
+    cv_results <- RMSEP(model.pcr, estimate = "CV")
+    comp_opt <- selectNcomp(model.pcr, method = "onesigma", plot = TRUE)
+    paste("The optimal number of components is",
+          comp_opt,
+          "with an RMSE of",
+          cv_results$val[1,,comp_opt])
+    
+    # zoomed in plot
+    validationplot(model.pcr, val.type = "RMSEP", ncomp = 1:70, 
+                   main = "Zoomed in Validation Plot")
+    abline(v = comp_opt)
+    ```
+
+    Based on lecture discussions, the optimal number of components can be found
+    by determining the minimum RMSE, then selecting the number of components below
+    that which achieved the minimum RMSE while being within one standard error
+    of this value.
+
+    (c) Use the function \texttt{predplot()} to plot the measured \textit{y} values against the cross-validated \textit{y} values considering the optimal model.
+
+    ```{r, echo=TRUE}
+    predplot(model.pcr, comp_opt, line=TRUE)
+    ```
+
+    (d) Plot the predicted versus observed values for the test data, and compute the
+RMSE. Compare with the values from last exercise.
+
+    ```{r, echo=TRUE}
+    library(Metrics)
+    
+    test_pcr_pred <- predict(model.pcr, test, comp_opt)
+    test_pcr_rmse <- round(rmse(test$y, test_pcr_pred), 3)
+    paste("Test RMSE for",
+          comp_opt,
+          "Comps:", 
+          test_pcr_rmse)
+    
+    plot(test$y, test_pcr_pred)
+    ```
+
+    The forward selection model was the best performing model from the last exercise, 
+    which achieved a test RMSE of 0.236. This model also performed better than the 
+    optimal pcr model that resulted in a test RMSE of 0.357.
+    
+    The forward model used only 16 variables out of the 107 available. 
+    PCR selects components that have the largest variance while
+    variable selection looks directly at the relationship between a predictor
+    and the response. For this dataset and train/test split, it happens that
+    the choosing high variance components led to a model with less predictive
+    power than simply directly looking at the relationship between predictors
+    and the response.
+
+    (e) The output object of \texttt{pcr()} contains the list elements \texttt{\$scores} and \texttt{\$loadings},
+which are the matrices \textbf{Z} and \textbf{V} from the course notes. Visualize in scatterplots
+the first two score vectors as well as the first two loadings vectors and try to
+explain shortly what you see.
+
+    ```{r, echo=TRUE}
+    # Plot PC1 vs PC2 scores
+    scores <- model.pcr$scores
+    plot(scores[, 1], scores[, 2],
+         xlab = "PC1 (Score 1)",
+         ylab = "PC2 (Score 2)",
+         main = "Scores Plot")
+    abline(v=0)
+    abline(h=0)
+    
+    # Plot PC1 vs PC2 loadings
+    loadings <- model.pcr$loadings
+    plot(loadings[, 1], loadings[, 2],
+         xlab = "PC1 (Loading 1)",
+         ylab = "PC2 (Loading 2)",
+         main = "Loadings Plot")
+    abline(v=0)
+    abline(h=0)
+    
+    text(loadings[, 1], loadings[, 2], 
+     labels = rownames(loadings),
+     pos = 1, cex = 0.3, col = "darkred")
+    ```
+
+    First looking at the plot of scores, observations that cluster together are similar
+    in the original high-dimensional space. The plot shows many clusters with a few
+    points each. Also, the plot shows outliers such as the points along the lower
+    left quadrant, which have large absolute values along both axes.
+    
+    The loadings plot shows how variables contribute to the principal components,
+    with variables farther away from the origin having larger contributions.
+    Additionally, variables that cluster together are highly correlated.
+    The plot shows many variables that are highly correlated around (-0.12, 0.0).
+    In general, variables that are lagged versions of another (e.g. Econ10.lag1,
+    Econ10.lag2, etc.) are similar.
+
+(2) \textit{$l_0$-norm regression}:
+
+    Take a quick look at Equation (1) in https://arxiv.org/pdf/2202.04820. This $l_0$
+    norm regularization has the effect that the size of the tuning parameter $\lambda$ determines
+    the number of variables included in the model. Thus, this is a convenient way to do
+    variable selection. We only need to identify an appropriate parameter $\lambda$.
+    This choice can be made with the function \texttt{L0Learn.cvfit} of the package \texttt{L0Learn}.
+    You need to provide \textbf{X} as matrix (\texttt{as.matrix()}), the response, and you can set a
+    maximum size of the model (parameter \texttt{maxSuppSize}).
+
+    (a) Use the training data to fit the model. Use \texttt{plot()} on the result object. How
+can you interpret the plot? How can you select the optimal model?
+
+    ```{r, echo=TRUE}
+    library(L0Learn)
+    
+    L0.model <- L0Learn.cvfit(as.matrix(subset(train, select = -c(y))), train$y)
+    plot(L0.model)
+    ```
+
+    The plot shows the mean cross-validation error model sizes ranging from
+    0 to the \texttt{maxSuppSize}. Though \texttt{cvfit} does not create models 
+    of every possible size between those two values. For each point, the mean
+    error and standard deviation is shown.
+    
+    The optimal model can be selected by first looking for the one with the smallest
+    mean error. Then, choosing the smallest possible model that is still within
+    one standard error of the smallest mean error.
+
+    (b) Which is the optimal tuning parameter $\lambda$. Extract the regression coefficients
+for the optimal $\lambda$. Which variables are in the model? \textit{Hint}: See help of the
+function.
+
+    ```{r, echo=TRUE}
+    # find minimum error index and its sd
+    min_index <- which.min(unlist(L0.model$cvMeans[,]))
+    min_RMSE <- L0.model$cvMeans[[1]][min_index]
+    min_SD <- L0.model$cvSDs[[1]][min_index]
+    
+    # find index of optimal
+    rmse_values <- L0.model$cvMeans[[1]][1:min_index] # trim RMSEs after min_index
+    rmse_values <- rmse_values - min_RMSE - min_SD # find largest negative val
+    opt_index <- 13 # by inspection of rmse_values
+    
+    # find optimal lambda
+    lambda_opt <- L0.model$fit$lambda[[1]][opt_index]
+    paste("The optimal tuning parameter is", lambda_opt)
+    
+    # extract coefs and vars from optimal model
+    sparse_matrix <- coef(L0.model, lambda = lambda_opt)
+    
+    # convert sparse matrix to vector
+    beta_vector <- as.vector(sparse_matrix)
+    
+    # get coefs and their indices
+    nonzero_indices <- which(beta_vector != 0)
+    variable_indices <- nonzero_indices[nonzero_indices > 1] - 1 # shift because of intercept
+    l0_optimal_coefs <- beta_vector[nonzero_indices][-1] # remove intercept
+    
+    # Create df
+    l0_optimal_coefs_df <- data.frame(
+      variable = colnames(df[-1])[variable_indices],  # remove y
+      coefficient = l0_optimal_coefs
+      )
+    l0_optimal_coefs_df
+    ```
+
+    (c) Plot the fitted values against the response for the training data and compute
+the RMSE. Compare to PCR.
+
+    ```{r, echo=TRUE}
+    # l0
+    train_l0_pred <- predict(L0.model, 
+                          newx = as.matrix(subset(train, select = -c(y))), 
+                          lambda = lambda_opt)
+    train_l0_rmse <- round(rmse(train$y, as.vector(train_l0_pred)), 3)
+    
+    # PCR
+    train_pcr_pred <- predict(model.pcr, train, comp_opt)
+    train_pcr_rmse <- round(rmse(train$y, train_pcr_pred), 3)
+    
+    # l0 plotting
+    plot(train$y, train_l0_pred,
+         xlab = "Response",
+         ylab = "Fitted",
+         main = "l0 Fitted vs Response for Train"
+         )
+    abline(a = 0, b = 1)
+    
+    # output
+    paste("PCR train RMSE:", train_pcr_rmse)
+    paste("L0 train RMSE:", train_l0_rmse)
+    
+    ```
+
+    Both models performed similarly on the train set, though the $l_0$ model was
+    slightly better.
+
+    (d) Plot the fitted values against the response for the test data and compute the
+RMSE. Draw conclusions.
+    
+    ```{r, echo=TRUE}
+    # l0
+    test_l0_pred <- predict(L0.model, 
+                      newx = as.matrix(subset(test, select = -c(y))), 
+                      lambda = lambda_opt)
+    test_l0_rmse <- round(rmse(test$y, as.vector(test_l0_pred)), 3)
+    
+    # l0 plotting
+    plot(test$y, test_l0_pred,
+         xlab = "Response",
+         ylab = "Fitted",
+         main = "l0 Fitted vs Response for Test"
+         )
+    abline(a = 0, b = 1)
+    
+    # PCR vs l0 comparison
+    paste("PCR test RMSE:", test_pcr_rmse)
+    paste("L0 test RMSE:", test_l0_rmse)
+    
+    ```
+
+    Both models were again fairly similar in performance, with the $l_0$ model
+    being slightly better. The forward selection model in the previous exercise
+    was shown to be better than PCR, and $l_0$ functions similarly in that it
+    explicitly selects predictors based on their relationship with the response.
+    Since both the forward selection and $l_0$ models contained a small fraction
+    of the predictors, the predictive power of PCR may have been watered down
+    since the principal components incorporates all variables.
+    These reasons could then explain why $l_0$ outperformed PCR.
+
+    (e) Compare the regression coefficients (without intercept) from PCR and $l_0$-norm
+regression in a plot and draw conclusions.
+
+    ```{r, echo=TRUE}
+    # load optimal pcr coefs into df
+    pcr_optimal_coefs <- model.pcr$coefficients[,,"27 comps"]
+    pcr_optimal_coefs_df <- data.frame(
+      variable = names(pcr_optimal_coefs),
+      coefficient = unname(pcr_optimal_coefs)
+      )
+    
+    # combine dfs
+    pcr_optimal_coefs_df$model <- "PCR"
+    l0_optimal_coefs_df$model  <- "L0"
+    coef_df <- rbind(pcr_optimal_coefs_df, l0_optimal_coefs_df)
+    ```
+    
+    ```{r, echo=TRUE}
+    library(ggplot2)
+    
+    ggplot(coef_df, aes(x = variable, y = coefficient, fill = model)) +
+      geom_point(aes(color = model)) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 3)) +
+      labs(title = "Comparison of Regression Coefficients",
+           x = "Variable",
+           y = "Coefficient Estimate")
+    ```
+
+    In general, $l_0$ is sparse compared to PCR. This shows that only a few
+    predictors are relevant in estimating the response. The PCR model has
+    many variables where the coefficients were not driven down to zero compared
+    to $l_0$. This indicates that the model may be capturing noise or using
+    irrelevant predictors. There were a few variables where PCR estimated 
+    especially large coefficients compared to $l_0$ such as \texttt{PhysFin1, PhyFin4, and
+    PhysFin8}. These variables could have outsized contributions to the variance
+    compared to the predictive power.
+
+</div></pre>

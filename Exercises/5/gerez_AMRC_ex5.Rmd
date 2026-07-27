@@ -1,0 +1,277 @@
+---
+title: "Exercise 5"
+author: "Kyzer Gerez"
+date: "12.11.2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+Compute the following models by using the function \texttt{glmnet()} of the 
+package \texttt{glmnet}, and by selecting the appropriate parameters.
+
+```{r, echo=TRUE, message=FALSE}
+library(robustHD)
+library(glmnet)
+library(Metrics)
+set.seed(1)
+
+# load dataset
+data(nci60, package="robustHD")
+
+# randomly select column from protein
+protein_rand_ind <- sample(ncol(protein), 1)
+protein_rand <- protein[, protein_rand_ind]
+
+# randomly split into 3/4 train, 1/4 test
+smp_size <- floor(3/4 * nrow(gene))
+train_ind <- sample(seq_len(nrow(gene)), size = smp_size)
+
+train_x <- as.matrix(gene[train_ind, ])
+train_y <- as.matrix(protein_rand[train_ind])
+
+test_x <- as.matrix(gene[-train_ind, ])
+test_y <- as.matrix(protein_rand[-train_ind])
+```
+
+1. \textit{Ridge Regression}
+
+```{r, echo=TRUE}
+model.ridge <- glmnet(train_x, train_y,
+                      alpha=0)
+
+plot(model.ridge, sign.lambda = 1)
+```
+
+```{r, echo=TRUE}
+cv.ridge <- cv.glmnet(train_x, train_y,
+                      alpha=0)
+
+plot(cv.ridge, sign.lambda=1)
+
+lambda_max <- cv.ridge$lambda[1]
+lambda_min <- tail(cv.ridge$lambda, n=1)
+```
+    
+```{r, echo=TRUE}
+# lambda_max
+test_ridge_max_pred <- predict(cv.ridge, test_x, lambda_max)
+test_ridge_max_rmse <- round(rmse(test_y, test_ridge_max_pred), 3)
+paste("Test RMSE for ridge regression model with lambda =",
+      round(lambda_max, 3),
+      "is", 
+      test_ridge_max_rmse)
+
+plot(test_y, test_ridge_max_pred,
+     main=paste("Actual vs Fitted for Test Using Ridge for lambda =", 
+                round(lambda_max, 3)),
+     xlab="Actual",
+     ylab="Fitted")
+abline(0, 1)
+
+# lambda_min
+test_ridge_min_pred <- predict(cv.ridge, test_x, lambda_min)
+test_ridge_min_rmse <- round(rmse(test_y, test_ridge_min_pred), 3)
+paste("Test RMSE for ridge regression model with lambda =",
+      round(lambda_min, 3),
+      "is", 
+      test_ridge_min_rmse)
+
+plot(test_y, test_ridge_min_pred,
+     main=paste("Fitted vs Actual for Test Using Ridge for lambda =", 
+                round(lambda_min, 3)),
+     xlab="Actual",
+     ylab="Fitted")
+abline(0, 1)
+```
+
+The CV plot suggests that the optimal value for $\lambda$ is 745, which was the 
+largest value calculated. However, when then trying to predict against the test
+set, the model with this $\lambda$ value simply predicts the same value for all
+observations, which is around the mean for `train_y`. This implies that
+all coefficients were suppressed such that the model was effectively empty. Though
+all predictors still had non-zero coefficients.
+
+A better choice for $\lambda$ is 10, which was the minimum value calculated.
+In this case, there are some predictors with relatively large coefficients.
+This model performs better than the empty model with the maximum $\lambda$.
+
+2. \textit{Lasso Regression}
+
+```{r, echo=TRUE}
+model.lasso <- glmnet(train_x, train_y,
+                      alpha=1)
+
+plot(model.lasso, sign.lambda = 1)
+```
+
+```{r, echo=TRUE}
+cv.lasso <- cv.glmnet(train_x, train_y,
+                      alpha=1)
+
+plot(cv.lasso, sign.lambda=1)
+
+# find lambda that is less than lambda.max but within 1 se
+mse_threshold <- cv.lasso$cvm[1] + cv.lasso$cvsd[1]
+for(i in 1:length(cv.lasso$cvm)) {
+  if (cv.lasso$cvm[i] >= mse_threshold) {
+    opt_index_lasso <- i
+    break
+  }
+}
+opt_lambda_lasso <- cv.lasso$lambda[opt_index_lasso]
+
+print(paste("The optimal model contains", cv.lasso$glmnet.fit$df[opt_index_lasso], 
+            "non-zero coefficients"))
+```
+
+```{r, echo=TRUE}
+# lambda_max
+test_lasso_pred <- predict(cv.lasso, test_x, opt_lambda_lasso)
+test_lasso_rmse <- round(rmse(test_y, test_lasso_pred), 3)
+paste("Test RMSE for lasso regression model with lambda =",
+      round(opt_lambda_lasso, 3),
+      "is", 
+      test_lasso_rmse)
+
+plot(test_y, test_lasso_pred,
+     main=paste("Fitted vs Actual for Test Using Lasso for lambda =", 
+                round(opt_lambda_lasso, 3)),
+     xlab="Actual",
+     ylab="Fitted")
+abline(0, 1)
+```
+
+A modified version of the 1se rule was used to find the optimal lambda for the 
+lasso regression model. The difference is that the smallest lambda is selected
+instead of the largest with respect to the standard error of the minimum MSE.
+The optimal model contained `r cv.lasso$glmnet.fit$df[opt_index_lasso]` non-zero 
+coefficients out of the original 22,283 predictors.
+
+3. \textit{Elastic Net Regression}
+
+```{r, echo=TRUE}
+# generate models with alpha in increments of 0.05 from [0,1]
+# and collect min cvm for all models
+elastic.net.models <- list()
+min_cvms <- numeric(0)
+for (i in 1:19) {
+  name <- paste0("alpha", i/20)
+  
+  elastic.net.models[[name]] <-
+    cv.glmnet(train_x, train_y, type.measure="mse", alpha=i/20)
+  
+  # extract min cvm
+  min_index <- elastic.net.models[[name]]$index[1]
+  min_cvms[[name]] <- elastic.net.models[[name]]$cvm[min_index]
+}
+
+# find model with smallest min cvm
+opt.alpha <- names(min_cvms)[min_cvms == min(min_cvms)]
+opt.model.elastic <- elastic.net.models[[opt.alpha]]
+
+# determine mse threshold using 1se rule
+min_index <- opt.model.elastic$index[1]
+mse_threshold <- opt.model.elastic$cvm[min_index] + opt.model.elastic$cvsd[min_index]
+
+# iterate and find opt_lambda
+for(i in 1:length(opt.model.elastic$cvm)) {
+  if (opt.model.elastic$cvm[i] >= mse_threshold) {
+    opt_index_elastic <- i
+    break
+  }
+}
+opt_lambda_elastic <- opt.model.elastic$lambda[opt_index_elastic]
+
+print(paste("The optimal model is", 
+            opt.alpha, 
+            "with lambda =", 
+            round(opt_lambda_elastic, 3)))
+
+plot(opt.model.elastic, sign.lambda=1)
+
+print(paste("The optimal model contains", opt.model.elastic$nzero[opt_index_elastic], 
+            "non-zero coefficients"))
+```
+
+```{r, echo=TRUE}
+test_elastic <- predict(opt.model.elastic, test_x, opt_lambda_elastic)
+test_elastic_rmse <- round(rmse(test_y, test_elastic), 3)
+paste("Test RMSE for elastic model with",
+      opt.alpha,
+      "and lambda =",
+      round(opt_lambda_lasso, 3),
+      "is", 
+      test_elastic_rmse)
+
+plot(test_y, test_elastic,
+     main=paste("Fitted vs Actual for Test for", 
+                opt.alpha,
+                "and lambda =", 
+                round(opt_lambda_elastic, 3)),
+     xlab="Actual",
+     ylab="Fitted")
+abline(0, 1)
+```
+
+4. \textit{Adaptive Lasso Regression}
+
+```{r, echo=TRUE}
+# get inverse of the absolute Ridge coefficients
+coef.ridge <- coef(cv.ridge, lambda_min)
+
+# calculate adaptive lasso regression model
+alasso <- glmnet(train_x, train_y, penalty.factor = 1 / abs(coef.ridge[-1]))
+
+plot(alasso, xvar="lambda", sign.lambda=1)
+```
+```{r, echo=TRUE}
+# run cv to find optimal tuning parameter
+alasso.cv <- cv.glmnet(train_x, train_y, penalty.factor = 1 / abs(coef.ridge[-1]))
+
+plot(alasso.cv, sign.lambda=1)
+```
+```{r, echo=TRUE}
+pred.alasso <- predict(alasso.cv, newx=test_x, s="lambda.1se")
+pred.alasso.rmse <- round(rmse(test_y, pred.alasso), 3)
+paste("Test RMSE for adaptive Lasso model:",
+      pred.alasso.rmse)
+
+plot(test_y, pred.alasso,
+     main="Fitted vs Actual for Test for Adaptive Lasso Model",
+     xlab="Actual",
+     ylab="Fitted")
+abline(0, 1)
+```
+
+5. Which of the models was most useful for the prediction task, which was not useful?
+
+The elastic net regression model with `r opt.alpha` and $\lambda=$ 
+`r opt_lambda_elastic` achieved the lowest RMSE in predicting the test set. 
+The optimal model was determined by first finding the $\alpha$ value that 
+resulted in a model with the lowest cvm. Then, a modified version of the 1 se 
+rule was used where instead the smallest possible lambda is selected. If the 1 
+se rule was followed, a model with only one coefficient would've been selected 
+instead.
+
+The Ridge and Lasso regression models also performed reasonably well, if the
+modified 1 se rule was followed.
+
+The adaptive Lasso regression model was not useful since it performed worse than
+simply predicting the average of the train set.
+
+6. The practitioner not only wants good predictions, but also interpretability of the
+model. Which of the models was most useful for this task?
+
+The Lasso regression model is by far the most interpretable in that it only
+contains `r cv.lasso$glmnet.fit$df[opt_index_lasso]` non-zero coefficients.
+The elastic model performed better, but it contained 
+`r opt.model.elastic$nzero[opt_index_elastic]` 
+non-zero coefficients in contrast. 
+
+The Ridge regression model is not useful at all since coefficients are not driven
+down to zero.
+
+</div></pre>

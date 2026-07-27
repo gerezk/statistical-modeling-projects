@@ -1,0 +1,235 @@
+---
+title: "Exercise 1"
+subtitle: "Advanced Methods for Regression and Classification"
+author: "Kyzer Gerez"
+date: "16.10.2025"
+output: pdf_document
+---
+
+```{r, echo=TRUE}
+data(College,package="ISLR")
+sum(is.na(College)) # original data frame has no observations with missing data
+```
+
+1. Predict the response Outstate by using only Expend as predictor. Plot the data, and visualize the regression line (abline()). What do you conclude?
+
+```{r, echo=TRUE}
+College_outstate_lm <- lm(Outstate ~ Expend, College)
+
+plot(x = College$Expend,                  
+     y = College$Outstate,            
+     xlab = "Expend",
+     ylab = "Outstate")
+abline(College_outstate_lm)
+```
+
+Outliers in the Expend dimension are influencing the regression line to take on a more narrow slope.
+
+2. It seems that the model is somewhat biased. Can you come up with a “more
+appropriate” model that better follows the visually visible linear trend? Just ideas:
+transformation, higher order terms, outlier handling.
+
+Apply a log or sqrt transformation to the predictor (Expend) to supress outliers.
+Another option is to use robust regression where smaller weights are used for
+outliers. 
+
+3. Now predict the response Apps by just using the binary variable Private as predictor. How does the regression model look like? Interpret the meaning of the regression coefficients.
+
+```{r, echo=TRUE}
+College_apps_lm <- lm(Apps ~ Private, College)
+coef(College_apps_lm)
+plot(x = College$Private,
+     y = College$Apps,
+     xlab = "Private",
+     ylab = "Apps")
+abline(College_apps_lm)
+```
+
+The negative regression coefficient for PrivateYes indicates that private schools
+receive less applications than public schools. R codes no as 0 and yes as 1. 
+For no, the predicted $Apps$ is simply the intercept, $\beta_0$. For yes, the 
+predicted $Apps$ is $\beta_0+\beta_1$.
+
+4. Convert Private to a variable with levels ±1, and regress Apps on this variable.
+How does the regression model look like? Interpret the meaning of the regression
+coefficients.
+
+```{r, echo=TRUE}
+College$PrivateNum <- ifelse(College$Private == "Yes", 1, -1)
+College_apps_recoded_lm <- lm(Apps ~ PrivateNum, College)
+coef(College_apps_recoded_lm)
+plot(x = College$PrivateNum,
+     y = College$Apps,
+     xlab = "Private",
+     ylab = "Apps")
+abline(College_apps_recoded_lm)
+```
+
+The intercepts and the coefficients are now different, but the predicted values
+are the same. The regression equation is $Apps=\beta_0+\beta_0 \times PrivateNum$.
+For $PrivateNum=-1$ (no), the predicted $Apps$ is 5729, which is equal to the
+intercept found in 3.
+
+```{r, echo=TRUE}
+# 66% of the sample size
+smp_size <- floor(2/3 * nrow(College))
+
+# set the seed to make partition reproducible
+set.seed(1)
+train_ind <- sample(seq_len(nrow(College)), size = smp_size)
+
+train <- College[train_ind, ]
+test <- College[-train_ind, ]
+
+# extract relevant columns for train and test
+var_names <- c("Outstate", "Room.Board", "S.F.Ratio", "Expend", "Grad.Rate", "Apps")
+train <- train[var_names]
+test <- test[var_names]
+```
+
+```{r, echo=TRUE}
+```
+
+5. Predict the response Apps by using all variables in the data frame that make sense
+content-wise. Inspect and interpret (as far as possible) the diagnostic plots. Are
+they supporting our model requirements?
+
+The following regression uses the predictors, Outstate, Room.Board, S.F.Ratio, 
+Expend, and Grad.Rate.
+
+```{r, echo=TRUE}
+library(ggplot2)
+
+# estimate regression model and predict
+train_lm <- lm(Apps ~ Outstate + Room.Board + S.F.Ratio + Expend + Grad.Rate, train)
+train_pred <- predict(train_lm, train)
+test_pred <- predict(train_lm, test)
+
+# plotting
+plot(train_lm)
+```
+
+```{r, echo=FALSE, include=FALSE}
+# train
+ggplot(data.frame(actual = train$Apps, predicted = train_pred),
+       aes(x = actual, y = predicted)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  labs(title = "Training Set: Predicted vs Actual Applications",
+       x = "Actual Apps", y = "Predicted Apps")
+
+#test
+ggplot(data.frame(actual = test$Apps, predicted = test_pred),
+       aes(x = actual, y = predicted)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  labs(title = "Test Set: Predicted vs Actual Applications",
+       x = "Actual Apps", y = "Predicted Apps")
+```
+
+The residuals vs fitted values plot does not show random scatter around 0 and
+suggests that the linearity and constant variance requirements are not met.
+
+6. As the regression coefficients depend on the scale of the explanatory variables, we
+cannot compare them directly. For a comparison, we need to scale the variables to
+variance 1, which can be done by scale(). Estimate the regression model as in 5. based on scaled variables. What can you conclude by inspecting the coefficients?
+
+```{r, echo=TRUE}
+# calculate train mean and sd
+train_mean <- sapply(train, mean)
+train_sd   <- sapply(train, sd)
+
+# apply scaling
+train_scaled <- as.data.frame(scale(train,
+                                    center = train_mean,
+                                    scale = train_sd))
+
+test_scaled <- as.data.frame(scale(test, # does not have variance of 1
+                                   center = train_mean,
+                                   scale = train_sd))
+
+# estimate regression model
+train_scaled_lm <- lm(Apps ~ Outstate + Room.Board + S.F.Ratio + Expend + Grad.Rate, 
+                      train_scaled)
+train_scaled_pred <- predict(train_scaled_lm, train_scaled)
+test_scaled_pred <- predict(train_scaled_lm, test_scaled)
+
+coef(train_scaled_lm)
+```
+
+Expend is the most strongly correlated variable, with S.F.Ratio following behind.
+
+7. Compute for models 5. and 6. the RMSEs of training and test set. What do you
+conclude? Do the models 5. and 6. perform equally well? Do they even lead to the
+identical predictions? Can we see this based on the RMSEs?
+
+```{r, echo=TRUE}
+library('Metrics')
+
+precision <- 3
+
+# model 5. train RMSE
+train_RMSE <- round(rmse(train$Apps, train_pred), precision)
+# test RMSE
+test_RMSE <- round(rmse(test$Apps, test_pred), precision)
+
+# model 6. train RMSE
+train_scaled_RMSE <- round(rmse(train_scaled$Apps, train_scaled_pred), precision)
+# test RMSE
+test_scaled_RMSE <- round(rmse(test_scaled$Apps, test_scaled_pred), precision)
+```
+
+```{r, echo=FALSE}
+print(paste('Model 5 train RMSE:', train_RMSE))
+print(paste('Model 5 test RMSE:', test_RMSE))
+print(paste('Model 6 train RMSE:', train_scaled_RMSE))
+print(paste('Model 6 test RMSE:', test_scaled_RMSE))
+```
+
+Models 5 and 6 are on different scales, so direct comparisons between the models
+are not meaningful. However, the results do show that both models perform worse 
+on the train set than the test set. The percent difference between the train
+and test sets for both models are also similar.
+
+8. The diagnostic plots may suggest that the response could be transformed. Repeat 5.
+for the log-transformed response. Is the model more appropriate? In which sense?
+
+```{r, echo=TRUE}
+# estimate regression model with transformed response and predict
+train_trans_lm <- lm(log(Apps) ~ Outstate + Room.Board + S.F.Ratio + Expend + Grad.Rate, train)
+train_trans_pred <- predict(train_trans_lm, train)
+test_trans_pred <- predict(train_trans_lm, test)
+
+# plotting
+plot(train_trans_lm)
+```
+
+```{r, echo=FALSE, include=FALSE}
+# plotting
+ggplot(data.frame(actual = log(train$Apps), predicted = train_trans_pred),
+       aes(x = actual, y = predicted)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  labs(title = "Training Set: Predicted vs Actual Applications",
+       x = "Actual Apps (log)", y = "Predicted Apps (log)")
+
+#test
+ggplot(data.frame(actual = log(test$Apps), predicted = test_trans_pred),
+       aes(x = actual, y = predicted)) +
+  geom_point() +
+  geom_abline(color = "red") +
+  labs(title = "Test Set: Predicted vs Actual Applications",
+       x = "Actual Apps (log)", y = "Predicted Apps (log)")
+```
+
+The residuals vs fitted plot shows better linearity and more constant variance
+than model 5. However, some nonlinearity is still present due to the trendline
+taking a negative slope for larger fitted values.
+
+9. How could we identify if model 5. or 8. is performing better? Obviously, we cannot
+compare the RMSEs.
+
+Transform the log-transformed model back to the original scale using exp().
+RMSEs can then be directly compared.
+
+</div></pre>

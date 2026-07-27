@@ -1,0 +1,354 @@
+---
+title: "Exercise 11"
+author: "Kyzer Gerez"
+date: "14.01.2026"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+Take the data set \texttt{german.credit} from the package \texttt{fairml} 
+(see help page). The variable \texttt{Credit\_risk} is the grouping variable, 
+and it indicates whether the persons were successful with their loan application 
+or not. The "BAD" clients are particularly interesting for us, but they are in 
+the minority (= imbalanced classes)
+
+For the following tasks, select randomly about 2/3 of the observations from each class
+as training data, and the rest as test data.
+
+```{r echo=TRUE, message=FALSE}
+library(fairml); data(german.credit)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(caret)
+
+set.seed(12427543)
+
+# separate the two classes
+credit.BAD <- german.credit[german.credit$Credit_risk == 'BAD',]
+credit.GOOD <- german.credit[german.credit$Credit_risk == 'GOOD',]
+
+# get sample sizes for each class
+samp.size.BAD <- floor(2/3*nrow(credit.BAD))
+samp.size.GOOD <- floor(2/3*nrow(credit.GOOD))
+
+# create train index
+train.indx <- sample(as.numeric(rownames(credit.BAD)), size=samp.size.BAD)
+train.indx <- c(train.indx, sample(as.numeric(rownames(credit.GOOD)), samp.size.GOOD))
+
+# create stratified train and test splits
+train <- german.credit[train.indx,]
+test <- german.credit[-train.indx,]
+```
+
+1. *Classification trees*: function \texttt{rpart()} from the R package 
+\texttt{rpart}
+    (a) Compute an initial tree $T_0$ (see \texttt{help(rpart)} or lecture notes).
+    
+    ```{r, echo=TRUE}
+    mod.T_0 <- rpart(Credit_risk~., data=train, method='class', xval=20)
+    ```
+
+    (b) Visualize the tree with the function \texttt{rpart.plot()} from the 
+    package \texttt{rpart.plot}, and try to interpret the results.
+    
+    ```{r, echo=TRUE}
+    rpart.plot(mod.T_0)
+    ```
+    
+    Each node shows the predicted class and the percentage of observations in 
+    the node. At each branch, if the conditions are met, then take the left 
+    subtree. Else, take the right subtree. The middle number in each node 
+    represents the probability that an observation that falls to this node has
+    a good credit risk i.e. nodes labelled 'BAD' will have low values.
+    
+    For the above tree, the first branch checks the account status. If it's less
+    than 200 DM, the left subtree is taken. At this next level, 56% of 
+    observations go to the left subtree, while the rest take the right. This
+    process repeats until a leaf node is reached. 
+    
+    (c) Predict the class variable for the test set (see 
+    \texttt{help(predict.rpart)} or lecture notes). Show the confusion table and 
+    report the balanced accuracy.
+    
+    ```{r, echo=TRUE}
+    # predict
+    pred.T_0 <- predict(mod.T_0, newdata=test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.T_0 <- confusionMatrix(as.factor(pred.T_0), 
+                                           as.factor(test$Credit_risk))
+    confusionMatrix.T_0$table
+    confusionMatrix.T_0$byClass['Balanced Accuracy']
+    ```
+    
+    (d) Show and interpret results of cross-validation obtained by using 
+    \texttt{plotcp()}. What is the optimal tree complexity?
+    
+    ```{r, echo=TRUE}
+    printcp(mod.T_0)
+    ```
+    
+    ```{r, echo=TRUE}
+    plotcp(mod.T_0)
+    ```
+    
+    The optimal tree complexity appears to be 0.0125.
+    
+    (e) Prune the tree $T_0$ to the optimal complexity using \texttt{prune()}. 
+    Visualize and interpret the results.
+    
+    ```{r, echo=TRUE}
+    mod.T_0.pruned <- prune(mod.T_0, cp=0.0125, method='class')
+    
+    rpart.plot(mod.T_0.pruned)
+    ```
+    
+    The pruned tree is of course simpler than the initial tree. The same 
+    variables are used. However, there are only 7 splits compared to 12 for the
+    initial tree.
+    
+    (f) Predict the class variable for the test set, show the confusion table, 
+    and report the balanced accuracy. Do we observe any improvement?
+    
+    ```{r, echo=TRUE}
+    # predict
+    pred.T_0.pruned <- predict(mod.T_0.pruned, newdata=test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.T_0.pruned <- confusionMatrix(as.factor(pred.T_0.pruned),
+                                                  as.factor(test$Credit_risk))
+    confusionMatrix.T_0.pruned$table
+    confusionMatrix.T_0.pruned$byClass['Balanced Accuracy']
+    ```
+
+    Overall, the pruned tree led to worse results in terms of the balanced 
+    accuracy. It was better in predicting the "GOOD" class, but performed much
+    worse in predicting the 'BAD' class, which led to a lower balanced accuracy.
+
+    (g) A simple way to improve the balanced accuracy could be to make use of the
+    argument \texttt{weights} within \texttt{rpart()}. Try it out and report the 
+    results.
+    
+    The approach I will take is to find the proportions of each class and use
+    the proportion for the opposite class as the weight.
+    
+    ```{r, echo=TRUE}
+    # create a weight vector based on the Credit_risk values
+    weight.BAD <- nrow(credit.GOOD)/nrow(german.credit)
+    weight.GOOD <- nrow(credit.BAD)/nrow(german.credit)
+    weights_vec <- ifelse(train$Credit_risk == "BAD", weight.BAD, weight.GOOD)
+    
+    # create weighted tree
+    mod.T.weight <- rpart(Credit_risk~ ., data=train, weights=weights_vec)
+    
+    # predict
+    pred.T.weight <- predict(mod.T.weight, newdata=test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.T.weight <- confusionMatrix(as.factor(pred.T.weight),
+                                                as.factor(test$Credit_risk))
+    confusionMatrix.T.weight$table
+    confusionMatrix.T.weight$byClass['Balanced Accuracy']
+    ```
+
+    The weights used led to an improved balanced accuracy. The 
+    prediction for the "BAD" class improved at the cost of the "GOOD" class. 
+    But this is tolerable since the "BAD" clients are the ones of interest.
+    
+1. *Random Forests*: function \texttt{randomForest()} from the R package 
+\texttt{randomForest}
+
+    (a) Use Random Forests to classify the training data and predict the class 
+    variable for the test data. Report the resulting confusion table and the 
+    balanced accuracy.
+    
+    ```{r, echo=TRUE}
+    # train random forest on default parameters
+    mod.RF_0 <- randomForest(Credit_risk~ ., data=train)
+    
+    # predict
+    pred.RF_0 <- predict(mod.RF_0, test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.RF_0 <- confusionMatrix(as.factor(pred.RF_0),
+                                            as.factor(test$Credit_risk))
+    confusionMatrix.RF_0$table
+    confusionMatrix.RF_0$byClass['Balanced Accuracy']
+    ```
+    
+    (b) Plot the result object with \texttt{plot()} and interpret the plot.
+    
+    ```{r, echo=TRUE}
+    plot(mod.RF_0)
+    legend("right", 
+           legend = c("OOB", levels(train$Credit_risk)), 
+           col = c("black", "red", "green"), 
+           lty = 1, 
+           cex = 0.8)
+    ```
+    
+    ```{r, echo=TRUE}
+    mod.RF_0[["err.rate"]][1:10,]
+    ```
+    
+    The y-axis is error rates and x-axis is the number of trees. The black line
+    represents the overall error rate, the red line is the error rate for the
+    "BAD" class, and the green line is the error rate for the "GOOD" class.
+    
+    The plot shows that the overall and "GOOD" error rates decrease with an 
+    increasing number of trees. However, the opposite behavior can be seen with
+    for the error rate of the "BAD" class.
+    
+    An inspection of the error rates show that the minimum error rate for the
+    "BAD" class is achieved with only 2 trees.
+    
+    (c) Try to improve the balanced accuracy with different strategies:
+    
+    - Modify the parameter \texttt{sampsize} in the \texttt{randomForest()}
+    function. What is it doing?
+    
+        This parameter maps to the bootstrap sample size. This means that it 
+        controls how many observations are randomly sampled from each node 
+        during the construction of the random forest model. With 
+        \texttt{replace=TRUE} (default), \texttt{sampsize=nrow(x)}. 
+        
+        To determine the value to set the parameter to, I tested different 
+        of $x$ for ceiling(x*nrow(train))) in 0.1 increments from 0.1 to
+        1.0. The value that maximizes the balanced accuracy is 0.5.
+    
+    ```{r, echo=TRUE}
+    # train RF
+    set.seed(12427543)
+    mod.RF.sampsize <- randomForest(Credit_risk~ ., data=train,
+                                    sampsize=ceiling(0.5*nrow(train)))
+    
+    # predict
+    pred.RF.sampsize <- predict(mod.RF.sampsize, test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.RF.sampsize <- confusionMatrix(as.factor(pred.RF.sampsize),
+                                                   as.factor(test$Credit_risk))
+    confusionMatrix.RF.sampsize$table
+    confusionMatrix.RF.sampsize$byClass['Balanced Accuracy']
+    ```
+    
+    - Modify the parameter \texttt{classwt} in the \texttt{randomForest()} 
+    function. What is it doing?
+        
+        This has a similar function as the \texttt{weights} parameter for 
+        \texttt{rpart()} in that it can be used to deal with imbalanced 
+        classes. In the below approach, I use a similar weight vector as in 
+        part 1g.
+    
+    ```{r, echo=TRUE}
+    set.seed(12427543)
+    
+    # train RF
+    mod.RF.classwt <- randomForest(Credit_risk~ ., data=train, 
+                                   classwt=c(weight.BAD, weight.GOOD))
+    
+    # predict
+    pred.RF.classwt <- predict(mod.RF.classwt, test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.RF.classwt <- confusionMatrix(as.factor(pred.RF.classwt),
+                                                  as.factor(test$Credit_risk))
+    confusionMatrix.RF.classwt$table
+    confusionMatrix.RF.classwt$byClass['Balanced Accuracy']
+    ```
+    
+    - Modify the parameter \texttt{cutoff} in the \texttt{randomForest()} 
+    function. What is it doing?
+        
+        This parameter controls the number of votes needed to determine the class
+        of an observation. By default, the majority vote wins i.e. 1/$k$ where 
+        $k$ is the number of classes.
+        
+        For the cell below, I tested different combinations of the cutoff vector
+        in increments of 0.05 e.g. \texttt{c(0.05, 0.95), c(0.10, 0.90), ...}
+        The best results were achieved with a cutoff vector of 
+        \texttt{c(0.35, 0.65)} favoring the "BAD" class.
+         
+    ```{r, echo=TRUE}
+    set.seed(12427543)
+    
+    # train RF
+    mod.RF.cutoff <- randomForest(Credit_risk~ ., data=train, 
+                                  cutoff=c(0.35, 0.65))
+    
+    # predict
+    pred.RF.cutoff <- predict(mod.RF.cutoff, test, type='class')
+    
+    # create confusion matrix and report required output
+    confusionMatrix.RF.cutoff <- confusionMatrix(as.factor(pred.RF.cutoff),
+                                                  as.factor(test$Credit_risk))
+    confusionMatrix.RF.cutoff$table
+    confusionMatrix.RF.cutoff$byClass['Balanced Accuracy']
+    ```
+    
+      **Which approach leads to the overall best solution?**
+      
+      Overall, changing the \texttt{cutoff} parameter gave the best solution
+      by far. It resulted in a balanced accuracy of 71.3% compared to 61.9%
+      for the default random forest model.
+      
+      Modfying \texttt{sampsize} led to a marginal improvement. It correctly 
+      predicted two more "BAD" observations,which is an increase in the 
+      balanced accuracy of 1% (absolute) over the default random forest model.
+      
+      The weights chosen for the \texttt{classwt} yielded the same results as
+      the default random forest model.
+    
+    (d) Run the function \texttt{randomForest()} based on the best strategy from 
+    above, with the additional option \texttt{importance=TRUE}, and plot the 
+    result object with \texttt{plot()} and \texttt{varImpPlot()}. How can you 
+    interpret these plots?
+    
+    ```{r, echo=TRUE}
+    set.seed(12427543)
+    
+    # train RF
+    mod.RF.best <- randomForest(Credit_risk~ ., data=train, 
+                                cutoff=c(0.35, 0.65),
+                                importance=TRUE)
+    
+    plot(mod.RF.best)
+    legend("topright", 
+           legend = c("OOB", levels(train$Credit_risk)), 
+           col = c("black", "red", "green"), 
+           lty = 1, 
+           cex = 0.8)
+    ```
+    
+    ```{r, echo=TRUE}
+    varImpPlot(mod.RF.best, type=1)
+    ```
+    
+    ```{r, echo=TRUE}
+    varImpPlot(mod.RF.best, type=2)
+    ```
+
+    The results for \texttt{plot()} shows much better behavior than that from
+    the default random forest model in that increasing the number of trees
+    decreases the error rate for both classes. The error rate for the "GOOD"
+    class does settle at a higher value than in the default model, but this
+    is acceptable since the performance on the "BAD" class is greatly improved.
+    
+    The function \texttt{varImpPlot()} displays the importance of variables 
+    based on two different measures. The top plot is based on the mean
+    decrease in accuracy. The bottom plot uses the mean decrease in node
+    impurity.
+    
+    The lecture notes explain that the Gini index or node impurity is preferred
+    over misclassification error Given this recommendation, the top three
+    most important variables are \texttt{Credit\_amount}, 
+    \texttt{Account\_status}, and \texttt{Duration}.
+    
+    The only disagreement with the misclassification error method in the top-3
+    is that it swaps \texttt{Credit\_amount} for \texttt{Credit\_history}.
+
+</div></pre>

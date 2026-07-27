@@ -1,0 +1,323 @@
+---
+title: "Exercise 7"
+author: "Kyzer Gerez"
+date: "26.11.2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+```{r, echo=TRUE}
+library(fastDummies)
+
+# read csv and drop duration col
+d <- subset(read.csv2("bank.csv"), select=-c(duration))
+
+# check for na
+rownames(d[rowSums(is.na(d)) > 0,])
+
+# convert month to numeric representation
+d["month"] <- match(d[["month"]], tolower(month.abb))
+
+# convert binary variables to numeric representation
+d$default <- ifelse(d$default=="no", 0, 1)
+d$housing <- ifelse(d$housing=="no", 0, 1)
+d$loan <- ifelse(d$loan=="no", 0, 1)
+d$y <- ifelse(d$y=="no", 0, 1)
+
+# split into 3/4 train, 1/4 test
+smp_size <- floor(3/4 * nrow(d))
+
+# set the seed to make partition reproducible
+set.seed(1)
+train_ind <- sample(seq_len(nrow(d)), size = smp_size)
+
+train <- d[train_ind, ]
+test <- d[-train_ind, ]
+```
+
+1. Use the same data set \texttt{bank.csv} as in the last exercise, also 
+without variable “duration”.
+
+    (a) Use logistic regression for a training set (function \texttt{glm()} with
+    \texttt{family="binomial"}). Look at the inference table (with 
+    \texttt{summary()}) and interpret the outcome.
+    
+    ```{r, echo=TRUE}
+    library(MASS)
+    
+    # train model
+    mod.log.reg <- glm(y ~., train, family="binomial")
+    
+    summary(mod.log.reg)
+    ```
+  
+    The summary shows that the predictors marital, loan, housing, and 
+    campaign are significant in predicting the response. Additionally, the 
+    values job-retired, education-tertiary, contact-unkown, and poutcome-success
+    are significant.
+    
+    (b) Use the model to predict the group label of the remaining test set 
+    observations (what does the function actually predict by default?). Compute 
+    the misclassification rate for every group separately, show the confusion 
+    table, and report the balanced accuracy.
+    
+    The misclassification rate for each group can be calculated as 
+    $\frac{FN+FP}{n}$ where $n$ is the number of instances for the given group.
+    
+    ```{r echo=TRUE, message=FALSE}
+    bank.test.pred <- predict(mod.log.reg, test)
+    
+    plot(bank.test.pred,col= test$y+2,
+         ylab="Predicted")
+    
+    # convert from linear to binary scale
+    bank.test.pred.mod <- ifelse(bank.test.pred<=0, 0, 1)
+      
+    # confusion matrix and balanced accuracy
+    library(caret)
+    
+    bank.test.confusion <- confusionMatrix(data=as.factor(bank.test.pred.mod),
+                                           reference=as.factor(test$y),
+                                           positive = "1")
+    bank.test.confusion$table
+    bank.test.confusion$byClass["Balanced Accuracy"]
+    
+    # compute misclassification rate for no
+    no.total <- bank.test.confusion$table[1,1] + bank.test.confusion$table[2,1]
+    no.FN <- bank.test.confusion$table[2,1]
+    no.FP <- bank.test.confusion$table[1,2]
+    bank.misclass.no <- round((no.FN + no.FP) / no.total, 3)
+    
+    # compute misclassification rate for yes
+    yes.total <- bank.test.confusion$table[1,2] + bank.test.confusion$table[2,2]
+    yes.FN <- bank.test.confusion$table[1,2]
+    yes.FP <- bank.test.confusion$table[2,1]
+    bank.misclass.yes <- round((yes.FN + yes.FP) / yes.total, 3)
+    
+    # output misclassification rates
+    print(paste("The misclassification rate for 'no' is", bank.misclass.no))
+    print(paste("The misclassification rate for 'yes' is", bank.misclass.yes))
+    ```
+    
+    The predictions are returned in the scale of the linear predictor, with
+    zero as the decision boundary. The model predicts "no" by default since the 
+    intercept is a negative value.
+    
+    The colors in the plot indicates the true class of the observation, with red
+    being "no" and green being "yes".
+    
+    (c) A way to consider the problem of imbalanced groups is to assign a weight 
+    to every observation, by using the weights argument in the \texttt{glm()} 
+    function. How do you have to select the weights, and what is the resulting 
+    confusion table and balanced accuracy?
+    
+    The weights can simply be the proprtion of each class for the train set.
+    The weight for the minority class would be the proportion of the majority
+    class and vice versa. 
+    
+    ```{r echo=TRUE, warning=FALSE}
+    # calculate weights
+    weight.0 <- nrow(train[train$y == 1,])/ nrow(train)
+    weight.1 <- nrow(train[train$y == 0,])/ nrow(train)
+    
+    # create weight vector
+    weights <- ifelse(train$y == 0, weight.0, weight.1)
+    
+    # train weighted model
+    mod.weighted <- glm(y ~., train, 
+                        family="binomial",
+                        weights=weights)
+    
+    # predict
+    bank.weighted.test.pred <- predict(mod.weighted, test)
+    
+    plot(bank.weighted.test.pred,col= test$y+2,
+         ylab="Predicted")
+    
+    # convert from linear to binary scale
+    bank.weighted.test.pred.mod <- ifelse(bank.weighted.test.pred<=0, 0, 1)
+    
+    # confusion matrix and balanced accuracy
+    bank.weighted.test.confusion <- confusionMatrix(data=as.factor(bank.weighted.test.pred.mod),
+                                           reference=as.factor(test$y),
+                                           positive = "1")
+    bank.weighted.test.confusion$table
+    bank.weighted.test.confusion$byClass["Balanced Accuracy"]
+    
+    # compute misclassification rate for no
+    no.total <- bank.weighted.test.confusion$table[1,1] +
+      bank.weighted.test.confusion$table[2,1]
+    no.FN <- bank.weighted.test.confusion$table[2,1]
+    no.FP <- bank.weighted.test.confusion$table[1,2]
+    bank.misclass.no <- round((no.FN + no.FP) / no.total, 3)
+    
+    # compute misclassification rate for yes
+    yes.total <- bank.weighted.test.confusion$table[1,2] +
+      bank.weighted.test.confusion$table[2,2]
+    yes.FN <- bank.weighted.test.confusion$table[1,2]
+    yes.FP <- bank.weighted.test.confusion$table[2,1]
+    bank.misclass.yes <- round((yes.FN + yes.FP) / yes.total, 3)
+    
+    # output misclassification rates
+    print(paste("The misclassification rate for 'no' is", bank.misclass.no))
+    print(paste("The misclassification rate for 'yes' is", bank.misclass.yes))
+    ```
+    
+    The weighted model has an improved balanced accuracy at the cost of a much
+    higher misclassification rate for the 'yes' group.
+    
+    (d) Based on the model from 1(c), use stepwise variable selection with the 
+    function \texttt{step()} to simplify the model. Does this also lead to an 
+    improvement of the balanced accuracy?
+    
+    ```{r echo=TRUE, warning=FALSE}
+    # backward selection
+    mod.back <- step(mod.weighted,
+                     direction = "backward",
+                     trace=0)
+    
+    # predict
+    bank.back.test.pred <- predict(mod.back, test)
+    
+    plot(bank.back.test.pred,col= test$y+2,
+         ylab="Predicted")
+    
+    # convert from linear to binary scale
+    bank.back.test.pred.mod <- ifelse(bank.back.test.pred<=0, 0, 1)
+    
+    # confusion matrix and balanced accuracy
+    bank.back.test.confusion <- confusionMatrix(data=as.factor(bank.back.test.pred.mod),
+                                           reference=as.factor(test$y),
+                                           positive = "1")
+    bank.back.test.confusion$table
+    bank.back.test.confusion$byClass["Balanced Accuracy"]
+    ```
+    
+    The balanced accuracy for the backward selection model is 
+    `r round(bank.back.test.confusion$byClass["Balanced Accuracy"], 3)`.
+    This is slightly better than the balanced accuracy for the original model,
+    which is 
+    `r round(bank.weighted.test.confusion$byClass["Balanced Accuracy"], 3)`.
+    
+2. Use the data set \texttt{data(Khan)} from the package \texttt{ISLR}. The data 
+set consists of a number of tissue samples corresponding to four distinct types 
+of small round blue cell tumors. For each tissue sample, 2308 gene expression 
+measurements are available (see also help file). The task is to train a 
+classifier based on the training data (\texttt{Khan\$xtrain}, \texttt{Khan\$ytrain}),
+use it for predicting the class of the test data (\texttt{Khan\$xtest}), and to 
+evaluate the predictions using the group information of the test data 
+(\texttt{Khan\$ytest}).
+
+    ```{r, echo=TRUE}
+    library(ISLR)
+    data(Khan)
+    
+    print(paste("n =", nrow(Khan$xtrain)))
+    print(paste("p =", ncol(Khan$xtrain)))
+    ```
+
+    (a) Why would LDA or QDA not work here? Would RDA work (you can either
+    try it out, or simply argue)?
+    
+    LDA and QDA requires that the sample covariance matrix to be full rank
+    and invertable, which does not happen if $n<p$. For the Khan dataset, $n<p$.
+    In contrast, RDA works under this condition because it ensures stability
+    of the covariance matrix by shifting it towards a diagonal matrix or pooled
+    covariance matrix using the two tuning parameters.
+    
+    (b) Use the function \texttt{cv.glmnet()} from the package \texttt{glmnet}, 
+    with the argument \texttt{family="multinomial"}, to build a model for the 
+    training set (the response might need to be converted to a factor). Plot the 
+    outcome object. What do you conclude? What is the objective function to be 
+    minimized?
+    
+    ```{r echo=TRUE, warning=FALSE}
+    library(glmnet)
+    
+    mod.multi.glm <- cv.glmnet(x=Khan$xtrain, y=Khan$ytrain, 
+                               family="multinomial")
+    plot(mod.multi.glm, sign.lambda=1)
+    ```
+    
+    The plot shows that the best performing models have small lambda values, 
+    which means that coefficients are not shrunk significantly. However, the 
+    best models still contain only nine non-zero coefficients out of the 
+    original 2308 predictors.
+    
+    The objective function to be minimized is the log-likelihood function, and
+    the results are represented by the y-axis, multinomial deviance. The 
+    deviance is the negative contribution of each observation to the 
+    log-likelihood function.
+    
+    (c) Which variables contribute to the model? To see this, you can use 
+    \texttt{coef()} for the output object. You obtain an object with 4 (= number 
+    of groups) list elements, containing the estimated regression coefficients. 
+    Thus, this is different from our approach to logistic regression with $K$ 
+    groups in the course notes, where you would only obtain $K-1$ coefficient 
+    vectors.
+    
+    ```{r, echo=TRUE}
+    multi.glm.betas <- coef(mod.multi.glm) #  1.se
+    multi.glm.beta.1 <- multi.glm.betas$`1`
+    multi.glm.beta.2 <- multi.glm.betas$`2`
+    multi.glm.beta.3 <- multi.glm.betas$`3`
+    multi.glm.beta.4 <- multi.glm.betas$`4`
+    
+    print(paste("The coefficient vector for group 1 contains the variables",
+                toString(multi.glm.beta.1@i[2:length(multi.glm.beta.1@i)])))
+    print(paste("The coefficient vector for group 2 contains the variables",
+                toString(multi.glm.beta.2@i[2:length(multi.glm.beta.2@i)])))
+    print(paste("The coefficient vector for group 3 contains the variables",
+                toString(multi.glm.beta.3@i[2:length(multi.glm.beta.3@i)])))
+    print(paste("The coefficient vector for group 4 contains the variables",
+                toString(multi.glm.beta.4@i[2:length(multi.glm.beta.4@i)])))
+    ```
+    
+    (d) Select one of the variables from 2(c) which is relevant e.g. for the 
+    first group, and plot this variable against the response (using the training 
+    data). What you should see is that the values of the first group clearly 
+    differ from those of the other groups.
+    
+    ```{r, echo=TRUE}
+    # V123 vs y
+    plot(Khan$xtrain[,123], Khan$ytrain,
+         ylab="y",
+         xlab="V123",
+         main="Train Set")
+    ```
+    
+    (e) Now use the trained model and predict the group membership of the test 
+    data. Be careful, \texttt{predict()} yields predictions for each observation 
+    to each class, and you need to select the appropriate class. Report the 
+    confusion table and the misclassification error for the test data.
+    
+    ```{r, echo=TRUE}
+    Khan.test.pred <- predict(mod.multi.glm, Khan$xtest)
+
+    # iterate by row and column to determine predicted class for each obs
+    Khan.test.pred.mod <- numeric(length(Khan$ytest))
+    for(i in 1:nrow(Khan.test.pred)) {
+      class <- 0
+      max.prob <- -Inf
+      for(j in 1:ncol(Khan.test.pred)) {
+        if(Khan.test.pred[i, j,] > max.prob) {
+          class <- j
+          max.prob <- Khan.test.pred[i, j,]
+        }
+      }
+      Khan.test.pred.mod[i] = class
+    }
+    
+    # confusion table
+    Khan.confusion <- confusionMatrix(data=as.factor(Khan.test.pred.mod),
+                                           reference=as.factor(Khan$ytest))
+    Khan.confusion$table
+    ```
+
+    The confusion table shows that the model perfectly predicted each class
+    i.e. the misclassification rate for each class is zero.
+
+</div></pre>

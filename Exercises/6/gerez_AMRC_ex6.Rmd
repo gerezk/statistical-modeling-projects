@@ -1,0 +1,347 @@
+---
+title: "Exercise 6"
+author: "Kyzer Gerez"
+date: "19.11.2025"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+subtitle: Advanced Methods for Regression and Classification
+---
+
+```{r, echo=TRUE}
+library(fastDummies)
+
+# read csv and drop duration col
+d <- subset(read.csv2("bank.csv"), select=-c(duration))
+
+# check for na
+rownames(d[rowSums(is.na(d)) > 0,])
+
+# convert month to numeric representation
+d["month"] <- match(d[["month"]], tolower(month.abb))
+
+# convert binary variables to numeric representation
+d$default <- ifelse(d$default=="no", 0, 1)
+d$housing <- ifelse(d$housing=="no", 0, 1)
+d$loan <- ifelse(d$loan=="no", 0, 1)
+d$y <- ifelse(d$y=="no", 0, 1)
+
+# apply one-hot encoding to rest of categorical predictors
+d.encoding <- dummy_cols(d, 
+                         remove_selected_columns=TRUE)
+
+# split into 3/4 train, 1/4 test
+smp_size <- floor(3/4 * nrow(d))
+
+# set the seed to make partition reproducible
+set.seed(1)
+train_ind <- sample(seq_len(nrow(d.encoding)), size = smp_size)
+
+train <- d.encoding[train_ind, ]
+test <- d.encoding[-train_ind, ]
+```
+
+1. \textit{Linear Discrimant Analysis (LDA)}: function \texttt{lda} from 
+\texttt{library(MASS)}
+
+    (a) Apply \texttt{lda()} to the training set. Is any data preprocessing 
+    necessary or advisable?
+    
+    Yes, data preprocessing is necessary since LDA requires that all predictors 
+    be in numeric form and scaled. One hot-encoding should be used for nominal
+    predictors such as job and marital, while the binary predictors and ordinal 
+    month predictor can simply be converted to a numerical form. Education could 
+    also be treated as an ordinal variable, but it's unclear how unknown values 
+    should be handled; therefore, it's treated as a nominal variable instead.
+    
+    Additionally, unknown values will be treated as their own category and will
+    not be imputed.
+    
+    ```{r, echo=TRUE}
+    library(MASS)
+    
+    mod.lda <- lda(x = train[,-11], grouping = train$y) # remove y for x param
+    ```
+    
+    (b) Compute the evaluation measures for the training data. What do you conclude?
+    
+    ```{r echo=TRUE, message=FALSE}
+    lda.train.pred <- predict(mod.lda, newdata=train[,-11])
+    
+    # create confusion matrix
+    library(caret)
+    
+    lda.train.confusion <- confusionMatrix(data=lda.train.pred$class, 
+                                           reference=as.factor(train$y),
+                                           positive = "1")
+    lda.train.confusion
+    ```
+    
+    The model tends to predict no due to the unbalanced dataset. This can be 
+    seen from the high accuracy compared to the lower values for sensitivity and
+    balanced accuracy.
+    
+    (c) Predict the group membership for the test data and compute the evaluation
+    measures. What do you conclude?
+    
+    ```{r, echo=TRUE}
+    lda.test.pred <- predict(mod.lda, newdata=test[,-11])
+    
+    lda.test.confusion <- confusionMatrix(data=lda.test.pred$class,
+                                           reference=as.factor(test$y),
+                                           positive = "1")
+    lda.test.confusion
+    ```
+    
+    Again, the same results can be seen in that the model overpredicts for no
+    due to the unbalanced dataset. 
+    
+2. Assume that we want to maximize the balanced accuracy. This could be achieved
+by selecting a balanced training set, i.e., the same number of observations from both
+groups, to train the classifier. Thus, repeat tasks 1.(a)-(c) for:
+
+    ```{r, echo=TRUE}
+    # setup #
+    n_0 <- length(which(d.encoding$y==0)) # max
+    n_1 <- length(which(d.encoding$y==1)) # min
+    
+    train.only.0 <- d.encoding[which(d.encoding$y==0),]
+    train.only.1 <- d.encoding[which(d.encoding$y==1),]
+    
+    # get undersampled train set
+    under.indices <- sample(seq_len(nrow(train.only.0)), n_1)
+    under.0 <- train.only.0[under.indices,]
+    train.under <- rbind(train.only.1, 
+                         under.0)
+    
+    # get oversampled train set
+    over.indices <- sample(seq_len(nrow(train.only.1)), n_0, replace=TRUE)
+    over.1 <- train.only.1[over.indices,]
+    train.over <- rbind(train.only.0, 
+                         over.1)
+    ```
+
+    (a) “Undersampling”: Suppose the number of samples in the original training 
+    set is $n_1$ and $n_2$ for the two groups. Now select from this training set 
+    min($n_1$, $n_2$) samples from each group. The test set is unchanged.
+    
+    ```{r, echo=TRUE}
+    # train model
+    mod.lda.under <- lda(x = train.under[,-11], grouping = train.under$y)
+    
+    # predict on train and eval
+    lda.under.train.pred <- predict(mod.lda.under, newdata=train[,-11])
+    lda.under.train.confusion <- confusionMatrix(data=lda.under.train.pred$class,
+                                                 reference=as.factor(train$y),
+                                                 positive = "1")
+    lda.under.train.confusion
+    
+    # predict on test and eval
+    lda.under.test.pred <- predict(mod.lda.under, newdata=test[,-11])
+    lda.under.test.confusion <- confusionMatrix(data=lda.under.test.pred$class,
+                                                 reference=as.factor(test$y),
+                                                 positive = "1")
+    lda.under.test.confusion
+    ```
+    
+    (b) “Oversampling”: Select from the training set max($n_1$, $n_2$) samples 
+    from each group. From the smaller group you need to sample with replacement. 
+    The test set is unchanged.
+    
+    ```{r, echo=TRUE}
+    # train model
+    mod.lda.over <- lda(x = train.over[,-11], grouping = train.over$y)
+    
+    # predict on train and eval
+    lda.over.train.pred <- predict(mod.lda.over, newdata=train[,-11])
+    lda.over.train.confusion <- confusionMatrix(data=lda.over.train.pred$class,
+                                                 reference=as.factor(train$y),
+                                                 positive = "1")
+    lda.over.train.confusion
+    
+    # predict on test and eval
+    lda.over.test.pred <- predict(mod.lda.over, newdata=test[,-11])
+    lda.over.test.confusion <- confusionMatrix(data=lda.over.test.pred$class,
+                                                 reference=as.factor(test$y),
+                                                 positive = "1")
+    lda.over.test.confusion
+    ```
+    
+    Which strategy is more successful, and why?
+    
+    The oversampling strategy performed slightly better for the test set, while
+    undersampling resulted in a higher balanced accuracy for the train set. This 
+    is a bit unexpected since oversampling should lead to more overfitting. But
+    it being better for the test set makes sense. The disadvantage of 
+    undersampling is that information from the majority class is discarded, 
+    which can lead to weaker predictive power.
+
+3. \textit{Quadratic Discrimant Analysis (QDA)}: function \texttt{qda} from
+\texttt{library(MASS)}. Use oversampling and undersampling for \texttt{qda()}
+and report the evaluation measures for the test set. What do you conclude?
+
+    ```{r, echo=TRUE}
+    library(MASS)
+    
+    ### QDA-specific preprocessing ###
+    # check if class 0 predictors are full rank
+    X0 <- as.matrix(train[train$y == 0, -which(names(train) == "y")])
+    k <- qr(X0)$rank
+    p <- ncol(X0)
+    k; p
+    print("k<p, so class 0 predictors are not full rank.")
+    
+    # check for linear combos
+    remove.cols <- findLinearCombos(X0)$remove
+    
+    # remove predictors 25 29 32 36
+    train.qda <- train[, -remove.cols]
+    train.qda.under <- train.under[, -remove.cols]
+    train.qda.over <- train.over[, -remove.cols]
+    test.qda <- test[, -remove.cols]
+    
+    # find columns with near-zero variance
+    nzv_cols <- nearZeroVar(X0, saveMetrics = TRUE)
+    
+    # remove columns with near-zero variance
+    train.qda <- train.qda[, !names(train.qda) %in% 
+                             rownames(nzv_cols[nzv_cols$nzv == TRUE, ])]
+    train.qda.under <- train.qda.under[, !names(train.qda.under) %in% 
+                             rownames(nzv_cols[nzv_cols$nzv == TRUE, ])]
+    train.qda.over <- train.qda.over[, !names(train.qda.over) %in% 
+                             rownames(nzv_cols[nzv_cols$nzv == TRUE, ])]
+    test.qda <- test.qda[, !names(test.qda) %in% 
+                             rownames(nzv_cols[nzv_cols$nzv == TRUE, ])]
+    
+    ### undersampling ###
+    # train model
+    mod.qda.under <- qda(y ~ ., data=train.qda.under)
+    
+    # predict on train and eval
+    qda.under.train.pred <- predict(mod.qda.under, newdata=train.qda[,-9])
+    qda.under.train.confusion <- confusionMatrix(data=qda.under.train.pred$class,
+                                                 reference=as.factor(train.qda$y),
+                                                 positive = "1")
+    qda.under.train.confusion
+    # predict on test and eval
+    qda.under.test.pred <- predict(mod.qda.under, newdata=test.qda[,-9])
+    qda.under.test.confusion <- confusionMatrix(data=qda.under.test.pred$class,
+                                                 reference=as.factor(test.qda$y),
+                                                 positive = "1")
+    qda.under.test.confusion
+    
+    ## oversampling ##
+    # train model
+    mod.qda.over <- qda(y ~ ., data=train.qda.over)
+    
+    # predict on train and eval
+    qda.over.train.pred <- predict(mod.qda.over, newdata=train.qda[,-9])
+    qda.over.train.confusion <- confusionMatrix(data=qda.over.train.pred$class,
+                                                 reference=as.factor(train.qda$y),
+                                                 positive = "1")
+    qda.over.train.confusion
+    # predict on test and eval
+    qda.over.test.pred <- predict(mod.qda.over, newdata=test.qda[,-9])
+    qda.over.test.confusion <- confusionMatrix(data=qda.over.test.pred$class,
+                                                 reference=as.factor(test.qda$y),
+                                                 positive = "1")
+    qda.over.test.confusion
+    ```
+    
+    Significant additional data-preprocessing was needed for QDA to work. QDA is
+    brittle in that it can't handle predictors that have near zero variance or
+    are linear combinations of other predictors.
+    
+    The oversampling strategy outperformed for both the train and test sets.
+
+4. \textit{Regularized Discrimant Analysis (RDA)}: function \texttt{rda} from
+\texttt{library(klaR)} Use oversampling and undersampling for \texttt{rda()} and 
+report the evaluation measures for the test set. What do you conclude? Interpret the meaning of the resulting tuning parameters \texttt{gamma} and \texttt{lambda}.
+
+    ```{r, echo=TRUE}
+    library(klaR)
+    
+    ## undersampling ##
+    # train model
+    mod.rda.under <- rda(x = train.under[,-11], grouping = train.under$y)
+    
+    # predict on train and eval
+    rda.under.train.pred <- predict(mod.rda.under, newdata=train[,-11])
+    rda.under.train.confusion <- confusionMatrix(data=rda.under.train.pred$class,
+                                                 reference=as.factor(train$y),
+                                                 positive = "1")
+    rda.under.train.confusion
+    
+    # predict on test and eval
+    rda.under.test.pred <- predict(mod.rda.under, newdata=test[,-11])
+    rda.under.test.confusion <- confusionMatrix(data=rda.under.test.pred$class,
+                                                 reference=as.factor(test$y),
+                                                 positive = "1")
+    rda.under.test.confusion
+    
+    ## oversampling ##
+    # train model
+    mod.rda.over <- rda(x = train.over[,-11], grouping = train.over$y)
+    
+    # predict on train and eval
+    rda.over.train.pred <- predict(mod.rda.over, newdata=train[,-11])
+    rda.over.train.confusion <- confusionMatrix(data=rda.over.train.pred$class,
+                                                 reference=as.factor(train$y),
+                                                 positive = "1")
+    rda.over.train.confusion
+    
+    # predict on test and eval
+    rda.over.test.pred <- predict(mod.rda.over, newdata=test[,-11])
+    rda.over.test.confusion <- confusionMatrix(data=rda.over.test.pred$class,
+                                                 reference=as.factor(test$y),
+                                                 positive = "1")
+    rda.over.test.confusion
+    
+    # output tuning parameters
+    rda.tuning.params <- data.frame(
+      model = c("under", "over"),
+      gamma = c(mod.rda.under$regularization[["gamma"]],
+                mod.rda.over$regularization[["gamma"]]),
+      lambda = c(mod.rda.under$regularization[["lambda"]],
+                mod.rda.over$regularization[["lambda"]])
+    )
+    rda.tuning.params
+    ```
+The oversampling strategy performed significantly better than undersampling for
+both the train and test sets. RDA is a compromise between QDA and LDA. The lambda
+values for the two sampling strategies indicate that the estimated error rate is
+minimized using values that shape the models to being closer to LDA than QDA.
+The high values for gamma for both sampling strategies show that the covariance
+structure was shrunk to a more spherical shape. This means that predictors are
+more equally weighted compared to pure QDA and LDA.
+
+```{r, echo=TRUE}
+# summary of results
+summary <- data.frame(
+  model = c("lda", "lda.under", "lda.over", "qda.under", "qda.over", 
+            "rda.under", "rda.over"),
+  train_balanced_acc = c(lda.train.confusion$byClass[["Balanced Accuracy"]],
+                         lda.under.train.confusion$byClass[["Balanced Accuracy"]],
+                         lda.over.train.confusion$byClass[["Balanced Accuracy"]],
+                         qda.under.train.confusion$byClass[["Balanced Accuracy"]],
+                         qda.over.train.confusion$byClass[["Balanced Accuracy"]],
+                         rda.under.train.confusion$byClass[["Balanced Accuracy"]],
+                         rda.over.train.confusion$byClass[["Balanced Accuracy"]]),
+  test_balanced_acc = c(lda.test.confusion$byClass[["Balanced Accuracy"]],
+                        lda.under.test.confusion$byClass[["Balanced Accuracy"]],
+                        lda.over.test.confusion$byClass[["Balanced Accuracy"]],
+                        qda.under.test.confusion$byClass[["Balanced Accuracy"]],
+                        qda.over.test.confusion$byClass[["Balanced Accuracy"]],
+                        rda.under.test.confusion$byClass[["Balanced Accuracy"]],
+                        rda.over.test.confusion$byClass[["Balanced Accuracy"]])
+  )
+summary
+```
+
+Overall, QDA using the oversampling strategy outperformed all other models for
+both the train and test sets. Though comparisons between QDA and the other
+methods aren't on a completely sound basis since QDA required train and test
+sets with less predictors than the sets used to create the LDA and RDA models.
+
+</div></pre>
